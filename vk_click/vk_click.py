@@ -4,20 +4,9 @@ from dotenv import load_dotenv
 from urllib.parse import urlparse
 
 
-load_dotenv()
-
-
-def get_token():
-    token = os.getenv("VK_API_TOKEN")
-    if not token:
-        raise ValueError("Токен VK API не найден. Проверьте файл .env.")
-    return token
-
-
 def is_shorten_link(token, url):
     parsed_url = urlparse(url)
-
-    if parsed_url.netloc == "vk.cc":
+    if parsed_url.netloc == "vk.cc" and parsed_url.path.strip("/"):
         return True
 
     api_url = "https://api.vk.com/method/utils.checkLink"
@@ -27,9 +16,11 @@ def is_shorten_link(token, url):
     response = requests.get(api_url, headers=headers, params=params)
     response.raise_for_status()
 
-    data = response.json()
+    decoded_response = response.json()
+    if 'error' in decoded_response:
+        raise requests.exceptions.HTTPError(f"Ошибка API: {decoded_response['error']}")
 
-    if "response" in data and data["response"].get("status") == "not_banned":
+    if "response" in decoded_response and decoded_response["response"].get("status") == "not_banned":
         return False
 
     raise ValueError("Ссылка заблокирована или API вернул ошибку.")
@@ -41,54 +32,63 @@ def shorten_link(token, url):
     headers = {"Authorization": f"Bearer {token}"}
 
     response = requests.get(api_url, headers=headers, params=params)
-    data = response.json()
+    response.raise_for_status()
 
-    if "error" in data:
-        error_msg = data["error"].get("error_msg", "Неизвестная ошибка API")
-        raise ValueError(f"Ошибка API: {error_msg}")
+    decoded_response = response.json()
+    if 'error' in decoded_response:
+        raise requests.exceptions.HTTPError(f"Ошибка API: {decoded_response['error']}")
 
-    return data["response"]["short_url"]
+    return decoded_response["response"]["short_url"]
 
 
 def count_clicks(token, short_url):
-    key = urlparse(short_url).path.strip("/")  # Извлекаем последний сегмент пути
+    short_key = urlparse(short_url).path.strip("/")
 
     api_url = "https://api.vk.com/method/utils.getLinkStats"
     params = {
-        "key": key,
+        "key": short_key,
         "interval": "forever",
         "v": "5.131",
     }
     headers = {"Authorization": f"Bearer {token}"}
 
     response = requests.get(api_url, headers=headers, params=params)
-    data = response.json()
+    response.raise_for_status()
 
-    if "error" in data:
-        error_msg = data["error"].get("error_msg", "Неизвестная ошибка API")
-        raise ValueError(f"Ошибка API: {error_msg}")
+    decoded_response = response.json()
+    if 'error' in decoded_response:
+        raise requests.exceptions.HTTPError(f"Ошибка API: {decoded_response['error']}")
 
-    stats = data["response"].get("stats", [])
-    return stats[0]["views"] if stats else 0
+    stats_data = decoded_response["response"].get("stats", [])
+    return stats_data[0]["views"] if stats_data else 0
 
 
 def main():
-    token = get_token()
+    load_dotenv()
+    try:
+        token = os.environ["VK_API_TOKEN"]
+    except KeyError:
+        raise KeyError("Обязательная переменная окружения 'VK_API_TOKEN' не установлена.")
+
     url = input("Введите ссылку: ")
 
     try:
         if is_shorten_link(token, url):
-            clicks = count_clicks(token, url)
-            print(f"Сумма кликов по ссылке: {clicks}")
+            click_count = count_clicks(token, url)
+            print(f"Сумма кликов по ссылке: {click_count}")
         else:
             short_url = shorten_link(token, url)
             print("Сокращенная ссылка: ", short_url)
-    except ValueError as e:
-        print(e)
     except requests.exceptions.HTTPError as http_err:
         print(f"Ошибка HTTP запроса: {http_err}")
+    except requests.exceptions.RequestException as req_err:
+        print(f"Ошибка при запросе: {req_err}")
+    except ValueError as e:
+        print(f"Ошибка данных: {e}")
+    except KeyError as e:
+        print(f"Ошибка конфигурации: {e}")
     except Exception as e:
-        print("Произошла непредвиденная ошибка:", e)
+        print(f"Произошла непредвиденная ошибка: {e}")
 
 
 if __name__ == "__main__":
